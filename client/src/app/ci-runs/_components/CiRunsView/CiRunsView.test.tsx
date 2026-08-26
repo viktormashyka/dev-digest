@@ -1,11 +1,14 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, within } from "@testing-library/react";
 import { NextIntlClientProvider } from "next-intl";
 import type { CiRun } from "@devdigest/shared/contracts/eval-ci";
 import ciMessages from "../../../../../messages/en/ci.json";
 
 let RUNS: CiRun[] = [];
+let CI_LOADING = false;
+let CI_ERROR = false;
 const refreshMutate = vi.fn();
+const refetchMock = vi.fn();
 
 // CiRunsPage bundles the agent/repo filter vocabularies alongside the runs
 // (AC-28) — derive them from RUNS here the same way the server does, so
@@ -19,7 +22,7 @@ function page() {
 }
 
 vi.mock("@/lib/hooks/ci", () => ({
-  useCiRuns: () => ({ data: page(), isLoading: false, isError: false, refetch: vi.fn() }),
+  useCiRuns: () => ({ data: page(), isLoading: CI_LOADING, isError: CI_ERROR, refetch: refetchMock }),
   useRefreshCiRuns: () => ({ mutate: refreshMutate, isPending: false }),
 }));
 
@@ -61,6 +64,8 @@ function run(overrides: Partial<CiRun>): CiRun {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  CI_LOADING = false;
+  CI_ERROR = false;
 });
 
 function renderWithIntl(ui: React.ReactElement) {
@@ -108,5 +113,97 @@ describe("CiRunsView", () => {
     renderWithIntl(<CiRunsView />);
     fireEvent.click(screen.getByRole("button", { name: ciMessages.runs.refresh }));
     expect(refreshMutate).toHaveBeenCalledWith(true);
+  });
+
+  it("renders an error state (not a blank page) when the read fails, and retry re-queries", () => {
+    RUNS = [];
+    CI_ERROR = true;
+    renderWithIntl(<CiRunsView />);
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(screen.getByText(ciMessages.runs.emptyBody)).toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(refetchMock).toHaveBeenCalled();
+  });
+
+  it("renders a loading skeleton (not the empty state or a table) while the read is in flight", () => {
+    RUNS = [];
+    CI_LOADING = true;
+    const { container } = renderWithIntl(<CiRunsView />);
+    expect(container.querySelector(".skeleton")).not.toBeNull();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    expect(screen.queryByText(ciMessages.runs.emptyTitle)).not.toBeInTheDocument();
+  });
+
+  it("filters by agent to just that agent's runs (AC-28)", () => {
+    RUNS = [
+      run({ id: "r1", agent_name: "Security", pr_title: "Fix A" }),
+      run({ id: "r2", agent_name: "Style", pr_title: "Fix B" }),
+    ];
+    renderWithIntl(<CiRunsView />);
+    expect(screen.getAllByRole("row")).toHaveLength(3); // header + 2 runs
+
+    const [, agentSelect] = screen.getAllByRole("combobox");
+    fireEvent.change(agentSelect!, { target: { value: "Style" } });
+
+    expect(screen.getAllByRole("row")).toHaveLength(2); // header + 1
+    expect(screen.getByText("Fix B")).toBeInTheDocument();
+    expect(screen.queryByText("Fix A")).not.toBeInTheDocument();
+  });
+
+  it("filters by repo to just that repo's runs (AC-28)", () => {
+    RUNS = [
+      run({ id: "r1", repo: "acme/payments-api", pr_title: null, pr_number: null }),
+      run({ id: "r2", repo: "acme/frontend", pr_title: null, pr_number: null }),
+    ];
+    renderWithIntl(<CiRunsView />);
+    expect(screen.getAllByRole("row")).toHaveLength(3); // header + 2 runs
+
+    const [, , repoSelect] = screen.getAllByRole("combobox");
+    fireEvent.change(repoSelect!, { target: { value: "acme/frontend" } });
+
+    expect(screen.getAllByRole("row")).toHaveLength(2); // header + 1
+    // Scoped to the table: "acme/frontend"/"acme/payments-api" also appear
+    // as <option> text in the repo SelectInput itself, which would otherwise
+    // collide with a page-wide getByText.
+    const table = screen.getByRole("table");
+    expect(within(table).getByText("acme/frontend")).toBeInTheDocument();
+    expect(within(table).queryByText("acme/payments-api")).not.toBeInTheDocument();
+  });
+
+  it("defaults to the last-7-days window, and switching to all time reveals older runs (AC-28)", () => {
+    RUNS = [
+      run({ id: "recent", ran_at: new Date().toISOString(), pr_title: "Recent run" }),
+      run({ id: "old", ran_at: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(), pr_title: "Old run" }),
+    ];
+    renderWithIntl(<CiRunsView />);
+    expect(screen.getAllByRole("row")).toHaveLength(2); // header + only the recent run
+    expect(screen.queryByText("Old run")).not.toBeInTheDocument();
+
+    const [dateRangeSelect] = screen.getAllByRole("combobox");
+    fireEvent.change(dateRangeSelect!, { target: { value: "all" } });
+
+    expect(screen.getAllByRole("row")).toHaveLength(3); // header + both runs
+    expect(screen.getByText("Old run")).toBeInTheDocument();
+  });
+
+  it("shows a distinct 'no matches' message when filters narrow a non-empty list to zero (AC-28)", () => {
+    RUNS = [
+      run({ id: "r1", agent_name: "Security", repo: "acme/payments-api" }),
+      run({ id: "r2", agent_name: "Style", repo: "acme/frontend" }),
+    ];
+    renderWithIntl(<CiRunsView />);
+
+    const [, agentSelect, repoSelect] = screen.getAllByRole("combobox");
+    fireEvent.change(agentSelect!, { target: { value: "Security" } });
+    fireEvent.change(repoSelect!, { target: { value: "acme/frontend" } });
+
+    expect(screen.getByText(ciMessages.runs.noMatches)).toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    // Distinct from the initial-empty-runs EmptyState (AC-31) — the header/
+    // filters are still on screen, this is the post-filter narrow, not the
+    // "no CI run has ever been ingested" case.
+    expect(screen.queryByText(ciMessages.runs.emptyTitle)).not.toBeInTheDocument();
   });
 });

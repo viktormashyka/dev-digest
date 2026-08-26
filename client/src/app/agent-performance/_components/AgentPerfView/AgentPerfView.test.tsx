@@ -11,8 +11,12 @@ let PERF: AgentPerf = {
   cost_by_model: [],
 };
 
+let PERF_LOADING = false;
+let PERF_ERROR = false;
+const refetchMock = vi.fn();
+
 vi.mock("@/lib/hooks/agent-performance", () => ({
-  useAgentPerformance: () => ({ data: PERF, isLoading: false, isError: false, refetch: vi.fn() }),
+  useAgentPerformance: () => ({ data: PERF, isLoading: PERF_LOADING, isError: PERF_ERROR, refetch: refetchMock }),
 }));
 
 vi.mock("@/components/app-shell", () => ({
@@ -49,6 +53,8 @@ function row(overrides: Partial<AgentPerfRow>): AgentPerfRow {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  PERF_LOADING = false;
+  PERF_ERROR = false;
 });
 
 function renderWithIntl(ui: React.ReactElement) {
@@ -96,5 +102,24 @@ describe("AgentPerfView", () => {
     const sevenDayBtn = screen.getByRole("radio", { name: "7 days" });
     fireEvent.click(sevenDayBtn);
     expect(sevenDayBtn).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("renders an error state (not a blank page) when the read fails, and retry re-queries", () => {
+    PERF_ERROR = true;
+    renderWithIntl(<AgentPerfView />);
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(screen.getByText(perfMessages.loadError)).toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(refetchMock).toHaveBeenCalled();
+  });
+
+  it("renders a loading skeleton (not the empty state or figures) while the read is in flight", () => {
+    PERF_LOADING = true;
+    const { container } = renderWithIntl(<AgentPerfView />);
+    expect(container.querySelectorAll(".skeleton").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    expect(screen.queryByText(perfMessages.empty.title)).not.toBeInTheDocument();
   });
 });

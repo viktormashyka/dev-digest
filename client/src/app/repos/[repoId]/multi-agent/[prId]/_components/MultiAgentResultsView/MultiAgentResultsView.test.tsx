@@ -154,4 +154,27 @@ describe("MultiAgentResultsView", () => {
     expect(screen.getByText("Every agent failed to complete this run.")).toBeInTheDocument();
     expect(screen.getByText("Every agent failed for the same reason: diff load failed: timeout")).toBeInTheDocument();
   });
+
+  it("shows the partial-results banner when some agents are still unsettled but not all failed", () => {
+    useMultiAgentRunMock.mockReturnValue({
+      data: {
+        ...RUN,
+        columns: [RUN.columns[0]!, { ...RUN.columns[1]!, status: "running" }],
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    renderView();
+    expect(screen.getByText("Partial results — not every agent completed.")).toBeInTheDocument();
+    // Distinct from the all-failed banner (AC-49) — that one never renders here.
+    expect(screen.queryByText("Every agent failed to complete this run.")).not.toBeInTheDocument();
+  });
+
+  it("does not show the partial-results banner when every agent settled to done", () => {
+    useMultiAgentRunMock.mockReturnValue({ data: RUN, isLoading: false, isError: false, error: null, refetch: vi.fn() });
+    renderView();
+    expect(screen.queryByText("Partial results — not every agent completed.")).not.toBeInTheDocument();
+  });
 });
