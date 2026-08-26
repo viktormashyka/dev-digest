@@ -15,3 +15,5 @@ export * from "./onboarding";
 export * from "./brief";
 export * from "./eval";
 export * from "./multi-agent";
+export * from "./ci";
+export * from "./agent-performance";
