@@ -492,6 +492,37 @@ than debugging a silently-empty `diff.files` after the fact.
 
 ## Tool & Library Notes
 
+### 2026-08-26 — a fine-grained GitHub PAT with "Contents: Read and write" + "Pull requests: Read and write" still can't write `.github/workflows/**` — it needs a THIRD, separate "Workflows" permission, and GitHub's error for the gap is misleadingly generic
+
+Manually verifying specs/14-export-to-ci.md's Export Wizard against a real
+repo (`POST /agents/:id/export-ci` → `OctokitGitHubClient.commitFiles` →
+`git.createTree`), the export failed three times in a row with GitHub's own
+error text — `"Resource not accessible by personal access token"`, doc URL
+`rest/git/trees#create-a-tree` — even after (1) granting the token
+Contents+Pull-requests write access to the target repo, and (2) a full dev
+server restart to rule out a stale in-memory client. Both looked like
+plausible fixes and neither was it. Root cause, found by reproducing the
+exact call via `tsx` running the app's own `LocalSecretsProvider` →
+`OctokitGitHubClient.commitFiles` code path (not `curl` — a plain `curl`
+reproduction with the same token succeeded for every file individually,
+which is what made the actual scope gap invisible for so long) with
+progressively narrower file sets: creating a tree containing `.devdigest/**`
+files (including a 1.6 MB runner bundle) succeeds fine with only
+Contents+Pull-requests granted, but a tree containing `.github/workflows/
+devdigest.yml` — **and only that file** — fails identically. Fine-grained
+PATs (unlike classic PATs, which fold this into the `workflow` OAuth scope)
+gate `.github/workflows/**` writes behind a distinct **"Workflows"**
+repository permission that must be granted in addition to Contents; GitHub's
+403 for the missing-Workflows case reads exactly like a missing-Contents or
+missing-repo-access case, giving no hint which of the three is actually
+short. **Generalizes:** any fine-grained-PAT-authenticated GitHub write that
+touches `.github/workflows/*` needs Workflows: Read-and-write explicitly —
+if a `commitFiles`-style bulk-tree write to a mixed file set ever produces
+this exact error, isolate by removing the workflow file from the payload
+first before suspecting the credential's repo access or re-testing with a
+server restart, both of which are red herrings for this specific failure
+mode.
+
 ### 2026-08-25 — specs/13-multi-agent-review.md Phase A1: the concurrent per-agent loop held AC-19/AC-20 by construction, with zero changes to `RunLogger`/`RunBus` — confirmed by a new test, not just re-asserted
 
 `run-executor.ts`'s per-agent job loop (`executeRuns`) went from a sequential

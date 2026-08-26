@@ -87,6 +87,50 @@ mismatch), reconciliation planning, migration surgery, merge, and
 verification — no elapsed-time instrumentation was in place to report an
 exact figure.
 
+## Export-to-CI live verification (Parts 3–4, added 2026-08-26 later same session)
+
+The lab's final checklist items 3 and 4 ("тестовий PR проходить рев'ю в
+GitHub Actions, а CRITICAL блокує merge через required check"; "CI Runs
+отримує автентифікований результат") were verified against a real, freshly
+created public repo (`viktormashyka/devdigest-ci-test`, created this session
+specifically for this — no course-provided demo repo was available), not
+simulated:
+
+- **Export PR** (`#1`, `viktormashyka/devdigest-ci-test`): DevDigest's own
+  `POST /agents/:id/export-ci` opened a real PR (branch `devdigest/ci` →
+  `main`) containing the generated `.github/workflows/devdigest.yml`, agent
+  manifest, and bundled `agent-runner`. Reviewed manually (fork-guard
+  `if: github.event.pull_request.head.repo.fork == false`, least-privilege
+  `permissions: {contents: read, pull-requests: write}`, external actions
+  pinned to full commit SHA, secrets referenced only via `${{ secrets.* }}`)
+  before merging.
+- **Test PR** (`#2`, same repo, no fork — a hardcoded session secret +
+  365-day session TTL introduced in `src/middleware/session.ts`): the
+  exported workflow ran for real. `agent-runner` reported
+  `findings=1 blockers=1 gateTriggered=true posted=github_review`, exited 1,
+  and posted a real `CHANGES_REQUESTED` GitHub review naming the exact
+  hardcoded-secret line. Cost **$0.000353411**, duration **16.94s** (from the
+  uploaded `devdigest-result.json` artifact, not estimated).
+- **Required-check block, proven by attempting the merge, not just reading a
+  status badge:** after adding branch protection (`required_status_checks:
+  {contexts: ["review"]}`), `gh pr merge 2` failed with `"the base branch
+  policy prohibits the merge"` — `mergeStateStatus` was `BLOCKED`.
+- **CI Runs ingest, proven with real attribution:** `POST /ci/refresh`
+  ingested 3 real GitHub Actions runs; each `ci_runs` row correctly carries
+  the real `commit_sha`, `pr_number`, `agent`, `cost_usd`, and `duration_s`
+  pulled from the actual workflow artifact — including one incomplete run
+  (a diagnostic branch deleted mid-flight) correctly landing as
+  `status: "failed", failure_reason: "no_artifact_published"` rather than
+  silently disappearing or crashing the ingest.
+- **Secrets never appeared in logs or artifacts** — `OPENROUTER_API_KEY`/
+  `GITHUB_TOKEN` show as `***` in the Actions log; `devdigest-result.json`
+  contains only findings/verdict/cost, no credential material.
+
+**Retries this segment:** 3 failed `export-ci` attempts before success — not
+a product defect, an infrastructure/credential gap (next section) — plus one
+`kill`-a-stale-server attempt that failed silently (wrong terminal session)
+before the human restarted the dev server manually.
+
 ## Signals
 
 1. **Handoff efficiency** — not applicable; no `Agent`/`SendMessage` calls in
@@ -101,6 +145,18 @@ exact figure.
    — the `RunTraceDrawer` import break passed the merge silently and was
    only caught by running `pnpm typecheck` as a separate, deliberate
    post-merge step.
+4. **A misleading GitHub API error cost three retries before the real cause
+   surfaced:** `commitFiles`'s `git.createTree` call failed identically three
+   times (initial attempt, after granting Contents+Pull-requests permissions,
+   after a full dev-server restart) with GitHub's own error text — "Resource
+   not accessible by personal access token" — which reads as a generic
+   scope/propagation problem. Direct reproduction via `tsx` running the
+   app's own `LocalSecretsProvider`/`OctokitGitHubClient.commitFiles` code
+   (not just `curl`) with progressively narrowed file sets (single file →
+   full 6-file payload → `.github/workflows/*` alone) isolated the actual
+   cause: fine-grained GitHub PATs gate `.github/workflows/**` writes behind
+   a **separate "Workflows" repository permission**, distinct from
+   "Contents: Read and write" — see `server/LEARNINGS.md` 2026-08-26 entry.
 
 ## Recommendations
 
@@ -120,6 +176,16 @@ different call sites, run `pnpm typecheck` before trusting a conflict-free
 `git merge` — a clean merge only proves no two branches touched the same
 lines, not that cross-file references between them still resolve. Justified
 by signal 3.
+
+✅ `Target: specs/14-export-to-ci.md`, "Security" section — add a line: a
+fine-grained GitHub PAT used for `export-ci` must be granted **Contents,
+Pull requests, AND Workflows** (all "Read and write") — Contents alone lets
+every non-`.github/workflows/` file in the export succeed while the workflow
+file itself silently fails with a scope error that reads as a general
+credential problem, not a missing-permission-category one. Justified by
+signal 4 — this cost three real retries (including a full dev-server
+restart that turned out to be unnecessary) before isolation via direct
+reproduction found the actual cause.
 
 *(No `RECURRING` marker applies — this is the second ledger entry, and its
 predecessor, `2026-08-12-workflow-retro-skill.md`, retro'd an unrelated
