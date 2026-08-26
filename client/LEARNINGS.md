@@ -29,6 +29,29 @@ there is the bug the whole format exists to prevent.
 
 ## What Doesn't Work
 
+### 2026-08-26 — a clean `git merge` between two feature branches does not prove every cross-file reference between them still resolves
+
+Merging `feat/export-to-ci` into the branch already carrying
+`feat/multi-agent-review`'s finished implementation (L07 lab, dependency-
+ordered merge), git auto-resolved every textual overlap (`nav.ts`,
+`PrDetailView.tsx`, `hooks/index.ts`) with zero conflicts reported. But
+`MultiAgentResultsView.tsx` (from the multi-agent-review side) imported
+`RunTraceDrawer` by its OLD path
+(`@/app/repos/[repoId]/pulls/[number]/_components/RunTraceDrawer`), while
+`feat/export-to-ci`'s Phase E had relocated that same component to
+`@/components/run-trace-drawer/RunTraceDrawer` for its OWN cross-cutting
+reuse on the new CI Runs page (specs/13-multi-agent-review.md's D13 and
+specs/14-export-to-ci.md's Phase E cross-cutting both independently needed
+the same shared component, from different consumer files) — two different
+files, so no line ever conflicted, and git merged silently. `pnpm typecheck`
+(not the merge, not any test file's own suite) is what caught the dangling
+import — `TS2307: Cannot find module`. General lesson: after merging two
+feature branches whose specs both mention reusing the SAME third component
+from different call sites, always run `pnpm typecheck` immediately post-merge
+before trusting "zero conflicts" — a clean merge only proves no two branches
+touched the same lines, not that every cross-file reference between them
+still points somewhere real.
+
 ## Codebase Patterns
 
 ### 2026-08-22 — D21's derived agent identity {color, icon} was NOT wired into `RunReviewDropdown`'s multi-select rows beyond the icon — the Dropdown extension's scope was already closed
