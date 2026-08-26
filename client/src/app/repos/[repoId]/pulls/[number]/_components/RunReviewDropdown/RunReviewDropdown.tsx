@@ -70,6 +70,10 @@ export function RunReviewDropdown({
       const res = await startMultiAgent.mutateAsync({ prId, agentIds: multiSelected });
       setMultiSelected([]);
       router.push(`/repos/${repoId}/multi-agent/${res.pr_id}`);
+    } catch {
+      // Swallowed here: the global mutationCache onError (lib/providers.tsx)
+      // already toasts the failure — this catch only prevents an unhandled
+      // promise rejection from the fire-and-forget `void kickMulti()` call site.
     } finally {
       onRunSettled?.();
     }
