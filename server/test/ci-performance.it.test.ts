@@ -166,6 +166,39 @@ d('CiRepository Agent Performance aggregation (Testcontainers pg)', () => {
       // OWN ranAt is inside the window, so its finding must still count.
       expect(row!.accepted).toBe(1);
     });
+
+    it('a finding with neither acceptedAt nor dismissedAt is counted as pending', async () => {
+      const workspaceId = await createWorkspace();
+      const agentId = await createAgent(workspaceId);
+      const pr = await createRepoAndPr(workspaceId);
+      const ranAt = new Date();
+      const from = new Date(ranAt.getTime() - 60 * 60 * 1000);
+      const to = new Date(ranAt.getTime() + 60 * 60 * 1000);
+
+      const run = await insertRun(workspaceId, agentId, { status: 'done', ranAt, costUsd: 1 });
+      const [review] = await pg.handle.db
+        .insert(t.reviews)
+        .values({ workspaceId, prId: pr.id, agentId, runId: run.id, kind: 'review', createdAt: ranAt })
+        .returning();
+      await pg.handle.db.insert(t.findings).values({
+        reviewId: review!.id,
+        file: 'src/foo.ts',
+        startLine: 1,
+        endLine: 1,
+        severity: 'WARNING',
+        category: 'style',
+        title: 'An undecided finding',
+        rationale: 'Because.',
+        confidence: 0.9,
+        // acceptedAt/dismissedAt both omitted — still pending triage.
+      });
+
+      const [row] = await repo.performanceRows(workspaceId, from, to);
+      expect(row).toBeDefined();
+      expect(row!.pending).toBe(1);
+      expect(row!.accepted).toBe(0);
+      expect(row!.dismissed).toBe(0);
+    });
   });
 
   describe('the `to` upper bound is inclusive of exactly `to`, exclusive of anything after it', () => {

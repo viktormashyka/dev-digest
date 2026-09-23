@@ -231,4 +231,121 @@ describe('reviewPullRequest (engine)', () => {
     expect(seen.length).toBeGreaterThan(0);
     expect(seen.every((s) => s === 'sess-abc')).toBe(true);
   });
+
+  // specs/16-agent-performance-dashboard.md — costSource map-reduce aggregation:
+  // 'provider' only if EVERY chunk reported provider cost, else 'estimated'
+  // (mirrors the null-collapse rule costUsd itself already follows).
+  describe('costSource aggregation (map-reduce)', () => {
+    const twoFileDiff: UnifiedDiff = {
+      raw: '',
+      files: [
+        { path: 'a.ts', additions: 1, deletions: 0, hunks: [] },
+        { path: 'b.ts', additions: 1, deletions: 0, hunks: [] },
+      ],
+    };
+    const clean = { verdict: 'approve', summary: 'ok', score: 100, findings: [] };
+
+    function providerWithCosts(costUsds: number[], costSources: Array<'provider' | 'estimated' | null | undefined>): LLMProvider {
+      let call = 0;
+      return {
+        id: 'openrouter',
+        async completeStructured<T>(): Promise<StructuredResult<T>> {
+          const i = call++;
+          return {
+            data: clean as unknown as T,
+            model: 'm',
+            tokensIn: 0,
+            tokensOut: 0,
+            costUsd: costUsds[i]!,
+            costSource: costSources[i],
+            raw: '',
+            attempts: 1,
+          };
+        },
+        async listModels() {
+          return [];
+        },
+        async complete() {
+          throw new Error('not used');
+        },
+        async embed() {
+          return [];
+        },
+      };
+    }
+
+    it("both chunks 'provider' -> aggregated costSource is 'provider'", async () => {
+      const llm = providerWithCosts([0.01, 0.02], ['provider', 'provider']);
+      const outcome = await reviewPullRequest({
+        systemPrompt: 's',
+        model: 'm',
+        diff: twoFileDiff,
+        llm,
+        strategy: 'map-reduce',
+      });
+      expect(outcome.mode).toBe('map-reduce');
+      expect(outcome.costUsd).toBeCloseTo(0.03);
+      expect(outcome.costSource).toBe('provider');
+    });
+
+    it("one chunk 'estimated' among 'provider' chunks -> aggregated costSource downgrades to 'estimated'", async () => {
+      const llm = providerWithCosts([0.01, 0.02], ['provider', 'estimated']);
+      const outcome = await reviewPullRequest({
+        systemPrompt: 's',
+        model: 'm',
+        diff: twoFileDiff,
+        llm,
+        strategy: 'map-reduce',
+      });
+      expect(outcome.costSource).toBe('estimated');
+    });
+
+    it("a costed chunk with costSource omitted defaults to 'estimated', downgrading the aggregate", async () => {
+      const llm = providerWithCosts([0.01, 0.02], ['provider', undefined]);
+      const outcome = await reviewPullRequest({
+        systemPrompt: 's',
+        model: 'm',
+        diff: twoFileDiff,
+        llm,
+        strategy: 'map-reduce',
+      });
+      expect(outcome.costSource).toBe('estimated');
+    });
+
+    it('aggregated costSource is null whenever costUsd itself is null', async () => {
+      const llm: LLMProvider = {
+        id: 'openrouter',
+        async completeStructured<T>(): Promise<StructuredResult<T>> {
+          return {
+            data: clean as unknown as T,
+            model: 'm',
+            tokensIn: 0,
+            tokensOut: 0,
+            costUsd: null,
+            costSource: null,
+            raw: '',
+            attempts: 1,
+          };
+        },
+        async listModels() {
+          return [];
+        },
+        async complete() {
+          throw new Error('not used');
+        },
+        async embed() {
+          return [];
+        },
+      };
+      const outcome = await reviewPullRequest({
+        systemPrompt: 's',
+        model: 'm',
+        diff: twoFileDiff,
+        llm,
+        strategy: 'map-reduce',
+      });
+      expect(outcome.costUsd).toBeNull();
+      expect(outcome.costSource).toBeNull();
+    });
+  });
 });
