@@ -130,4 +130,40 @@ describe("AgentPerfView", () => {
     fireEvent.click(sevenDayBtn);
     expect(sevenDayBtn).toHaveAttribute("aria-checked", "true");
   });
+
+  it("a server-synthesized zero-run row shows N/A markers and, expanded, its accepted/dismissed/pending detail (AC-4)", () => {
+    PERF = {
+      summary: { runs: 3, total_cost_usd: 0.1, avg_accept_rate: 0.5, most_active_agent: "Security", range_days: 30, range: RANGE },
+      agents: [
+        row({
+          agent_id: "a3",
+          agent_name: "Idle Agent",
+          runs: 0,
+          runs_local: 0,
+          runs_ci: 0,
+          accepted: 0,
+          dismissed: 0,
+          pending: 0,
+          decisions: 0,
+          accept_rate: null,
+          avg_cost_usd: null,
+          avg_latency_ms: null,
+          cost_by_source: { provider: null, estimated: null, unknown: null },
+        }),
+      ],
+      cost_by_agent: [],
+      cost_by_model: [],
+    };
+    renderWithIntl(<AgentPerfView />);
+    expect(screen.getByText(perfMessages.table.noRunsInPeriod)).toBeInTheDocument();
+
+    const expandBtn = screen.getByRole("button", { name: perfMessages.table.expand.replace("{name}", "Idle Agent") });
+    fireEvent.click(expandBtn);
+
+    expect(expandBtn).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText(perfMessages.table.accepted)).toBeInTheDocument();
+    expect(screen.getByText(perfMessages.table.pending)).toBeInTheDocument();
+    // cost_by_source is entirely null — must fall back to N/A, never a fabricated "$0.00 reconciled" line.
+    expect(screen.getAllByText(perfMessages.notApplicable).length).toBeGreaterThan(0);
+  });
 });

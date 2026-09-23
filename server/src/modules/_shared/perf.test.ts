@@ -57,6 +57,12 @@ describe('computeAgentMetrics', () => {
     expect(metrics.avg_latency_ms).toBeNull();
   });
 
+  it('avg_cost_usd is null when costedRuns > 0 but totalCostUsd is null (a non-zero denominator with an unknown numerator)', () => {
+    const r = row({ runsLocal: 2, countedRuns: 2, costedRuns: 2, totalCostUsd: null });
+    const metrics = computeAgentMetrics(r, undefined);
+    expect(metrics.avg_cost_usd).toBeNull();
+  });
+
   it('cost_by_source buckets pass through provider/estimated/unknown sub-totals unchanged', () => {
     const r = row({ costProvider: 6, costEstimated: 2, costUnknown: null });
     const metrics = computeAgentMetrics(r, undefined);

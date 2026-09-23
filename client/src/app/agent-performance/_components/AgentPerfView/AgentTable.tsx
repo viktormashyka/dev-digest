@@ -144,11 +144,13 @@ export function AgentTable({
                       </span>
                       <span>
                         <span style={s.detailLabel}>{t("table.costBySource")}</span>
-                        {t("cost.reconciled", { amount: formatCost(r.cost_by_source.provider) })} ·{" "}
-                        {t("cost.estimated", { amount: formatCost(r.cost_by_source.estimated) })}
-                        {r.cost_by_source.unknown != null && (
-                          <> · {t("cost.unknown", { amount: formatCost(r.cost_by_source.unknown) })}</>
-                        )}
+                        {[
+                          r.cost_by_source.provider != null ? t("cost.reconciled", { amount: formatCost(r.cost_by_source.provider) }) : null,
+                          r.cost_by_source.estimated != null ? t("cost.estimated", { amount: formatCost(r.cost_by_source.estimated) }) : null,
+                          r.cost_by_source.unknown != null ? t("cost.unknown", { amount: formatCost(r.cost_by_source.unknown) }) : null,
+                        ]
+                          .filter((v): v is string => v != null)
+                          .join(" · ") || na}
                       </span>
                     </div>
                   </td>
