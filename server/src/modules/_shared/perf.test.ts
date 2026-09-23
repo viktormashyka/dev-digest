@@ -63,6 +63,15 @@ describe('computeAgentMetrics', () => {
     expect(metrics.avg_cost_usd).toBeNull();
   });
 
+  it('avg_findings_per_run divides by countedRuns, not raw runs — a still-running run has unknown (not zero) findings', () => {
+    // 1 done run with 4 findings + 1 still-running run (findingsCount not yet
+    // known, so it contributes 0 to totalFindings but must NOT dilute the
+    // denominator) — dividing by raw runs (2) would understate this to 2.
+    const r = row({ runsLocal: 2, countedRuns: 1, costedRuns: 1, totalFindings: 4 });
+    const metrics = computeAgentMetrics(r, undefined);
+    expect(metrics.avg_findings_per_run).toBe(4);
+  });
+
   it('cost_by_source buckets pass through provider/estimated/unknown sub-totals unchanged', () => {
     const r = row({ costProvider: 6, costEstimated: 2, costUnknown: null });
     const metrics = computeAgentMetrics(r, undefined);

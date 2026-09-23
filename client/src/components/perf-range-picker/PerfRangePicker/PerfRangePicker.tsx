@@ -59,6 +59,10 @@ export function PerfRangePicker({
               aria-checked={active}
               onClick={() => {
                 setCustomOpen(false);
+                // Clear stale dates so re-opening "Custom" later starts blank
+                // rather than resurrecting a range unrelated to this preset.
+                setFrom("");
+                setTo("");
                 onChange({ days });
               }}
               style={s.btn(active)}

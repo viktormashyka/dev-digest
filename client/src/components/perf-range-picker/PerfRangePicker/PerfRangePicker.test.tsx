@@ -55,4 +55,19 @@ describe("PerfRangePicker", () => {
     rerender(<PerfRangePicker value={range} onChange={onChange} t={t} />);
     expect(screen.getByRole("radio", { name: "Custom" })).toHaveAttribute("aria-checked", "true");
   });
+
+  it("clears the custom from/to inputs when a preset is picked, so re-opening Custom starts blank", () => {
+    const onChange = vi.fn();
+    render(<PerfRangePicker value={{ days: 30 }} onChange={onChange} t={t} />);
+
+    fireEvent.click(screen.getByRole("radio", { name: "Custom" }));
+    fireEvent.change(screen.getByLabelText("From"), { target: { value: "2026-08-01" } });
+    fireEvent.change(screen.getByLabelText("To"), { target: { value: "2026-08-31" } });
+
+    fireEvent.click(screen.getByRole("radio", { name: "7 days" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Custom" }));
+
+    expect(screen.getByLabelText("From")).toHaveValue("");
+    expect(screen.getByLabelText("To")).toHaveValue("");
+  });
 });

@@ -427,13 +427,15 @@ export class CiRepository {
   // ---- Agent Performance aggregation (AC-41…AC-46) ------------------------
 
   /**
-   * One row per agent with `agent_runs` in `[from, to)`, aggregated WITHOUT
-   * filtering on `source` (AC-45 — `local` and `ci` both count for runs,
-   * cost, duration, findings). `accepted`/`dismissed`/`pending` are joined
-   * through `reviews.run_id` AND windowed by the RUN's own `ranAt` (via a
-   * join to `agent_runs`, not `reviews.createdAt` — D2: a run just inside the
-   * period whose review committed just outside it must not silently lose its
-   * findings). Only local runs ever produce a review, so a CI-only agent's
+   * One row per agent with `agent_runs` in `[from, to]` — inclusive at both
+   * ends (matches the `lte` below and `ci-performance.it.test.ts`'s exact-`to`
+   * assertion), aggregated WITHOUT filtering on `source` (AC-45 — `local` and
+   * `ci` both count for runs, cost, duration, findings). `accepted`/`dismissed`/
+   * `pending` are joined through `reviews.run_id` AND windowed by the RUN's
+   * own `ranAt` (via a join to `agent_runs`, not `reviews.createdAt` — D2: a
+   * run just inside the period whose review committed just outside it must
+   * not silently lose its findings). Only local runs ever produce a review,
+   * so a CI-only agent's
    * `accepted`/`dismissed` both land at 0 — the service layer turns that into
    * `accept_rate: null`, never `0`, per AC-46.
    *
@@ -553,7 +555,7 @@ export class CiRepository {
     }));
   }
 
-  /** Cost broken down by model, over `[from, to)` — for AC-44's "by model"
+  /** Cost broken down by model, over `[from, to]` — for AC-44's "by model"
    *  donut. `local` and `ci` both count (AC-45). */
   async costByModel(workspaceId: string, from: Date, to: Date): Promise<{ model: string; cost: number }[]> {
     const rows = await this.db

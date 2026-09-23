@@ -124,7 +124,14 @@ export function computeAgentMetrics(row: PerfSourceRow, prev: PerfSourceRow | un
   const decisions = row.accepted + row.dismissed;
   const accept_rate = decisions > 0 ? row.accepted / decisions : null;
   const dismiss_rate = decisions > 0 ? row.dismissed / decisions : null;
-  const avg_findings_per_run = runs > 0 ? row.totalFindings / runs : null;
+  // D1 pattern — a still-`running` run's findings are unknown (not yet
+  // computed), not zero; counting it in the denominator would understate the
+  // average exactly like the pre-fix avg_cost_usd/avg_latency_ms bug. A
+  // `failed`/`cancelled` run DOES have a real, known 0 (run-executor.ts sets
+  // `findingsCount: 0` explicitly), so `countedRuns` (status='done') is
+  // narrower than strictly necessary but matches the other two averages'
+  // denominator for AC-1 "same rules" consistency.
+  const avg_findings_per_run = row.countedRuns > 0 ? row.totalFindings / row.countedRuns : null;
   const avg_cost_usd = row.costedRuns > 0 && row.totalCostUsd != null ? row.totalCostUsd / row.costedRuns : null;
   const avg_latency_ms =
     row.timedRuns > 0 && row.totalDurationMs != null ? row.totalDurationMs / row.timedRuns : null;

@@ -12,9 +12,10 @@ let PERF: AgentPerf = {
   cost_by_agent: [],
   cost_by_model: [],
 };
+let LOADING = false;
 
 vi.mock("@/lib/hooks/agent-performance", () => ({
-  useAgentPerformance: () => ({ data: PERF, isLoading: false, isError: false, refetch: vi.fn() }),
+  useAgentPerformance: () => ({ data: PERF, isLoading: LOADING, isError: false, refetch: vi.fn() }),
   // `PerfRangePicker` (a real, unmocked component) imports this helper from
   // the same module — the mock above replaces the whole module, so it must
   // be re-provided here too.
@@ -71,6 +72,7 @@ function row(overrides: Partial<AgentPerfRow>): AgentPerfRow {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  LOADING = false;
 });
 
 function renderWithIntl(ui: React.ReactElement) {
@@ -165,5 +167,25 @@ describe("AgentPerfView", () => {
     expect(screen.getByText(perfMessages.table.pending)).toBeInTheDocument();
     // cost_by_source is entirely null — must fall back to N/A, never a fabricated "$0.00 reconciled" line.
     expect(screen.getAllByText(perfMessages.notApplicable).length).toBeGreaterThan(0);
+  });
+
+  it("marks a low-sample agent's accept rate with the low-sample chip (clarification #2)", () => {
+    PERF = {
+      summary: { runs: 19, total_cost_usd: 0.1, avg_accept_rate: 0.5, most_active_agent: "Security", range_days: 30, range: RANGE },
+      agents: [row({ decisions: 19, low_sample: true })],
+      cost_by_agent: [],
+      cost_by_model: [],
+    };
+    renderWithIntl(<AgentPerfView />);
+    expect(screen.getByText(perfMessages.table.lowSample)).toBeInTheDocument();
+  });
+
+  it("renders the D4 loading skeleton (4 tiles + table area + 2 cards) while isLoading", () => {
+    LOADING = true;
+    PERF = { summary: { runs: 0, total_cost_usd: null, avg_accept_rate: null, most_active_agent: null, range_days: 30, range: RANGE }, agents: [], cost_by_agent: [], cost_by_model: [] };
+    const { container } = renderWithIntl(<AgentPerfView />);
+    expect(container.querySelectorAll(".skeleton").length).toBe(7);
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    expect(screen.queryByText(perfMessages.empty.title)).not.toBeInTheDocument();
   });
 });
