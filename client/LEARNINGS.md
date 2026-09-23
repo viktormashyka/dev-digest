@@ -31,6 +31,65 @@ there is the bug the whole format exists to prevent.
 
 ## Codebase Patterns
 
+### 2026-09-23 — a full `vi.mock("@/lib/hooks/x", () => ({...}))` on a hooks module silently strips every OTHER named export from it too, breaking a shared component that imports a plain helper (not a hook) from the same module
+
+Building the Agent Performance dashboard's range picker
+(`specs/16-agent-performance-dashboard.md`), `PerfRangePicker` (`src/
+components/perf-range-picker/PerfRangePicker/`) imports a pure type-guard,
+`isCustomPerfRange`, from `@/lib/hooks/agent-performance` — the same module
+`useAgentPerformance`/`useAgentStats` live in, since it's the one place
+`PerfRangeValue`'s shape is defined. `AgentPerfView.test.tsx` (pre-existing,
+now exercising the real un-mocked `PerfRangePicker`) does `vi.mock("@/lib/
+hooks/agent-performance", () => ({ useAgentPerformance: () => ({...}) }))` —
+a full factory replacement, not `vi.spyOn` on one export — which throws at
+render time with `No "isCustomPerfRange" export is defined on the ... mock`,
+even though the test never touches that function directly; it's `PerfRange
+Picker`'s own import that fails. `vi.mock`'s factory REPLACES the entire
+module's export surface; it does not merge with the real module unless the
+factory explicitly re-exports (or spreads) everything else a consumer might
+need. Fixed by adding `isCustomPerfRange: (v) => !!v && "from" in v` to the
+mock factory alongside `useAgentPerformance`. Generalizes: before wiring a
+NEW shared component into an ALREADY-mocked module's consumer tree, grep that
+component's own imports from the same module path and confirm each one is
+either re-provided in every existing full-factory `vi.mock` of that path, or
+switch those tests to `vi.spyOn(hooks, "theOneExport")` instead (which only
+replaces the named export it targets, per the `useSkillStats`/`StatsTab.
+test.tsx` convention already established elsewhere in this file) — the error
+message names the missing export but gives no hint that the REAL cause is a
+different component's import, several files away from the failing assertion.
+
+### 2026-09-23 — wiring `useRouter`/`useSearchParams` (`next/navigation`) into a component with an EXISTING vitest test that renders it directly throws "invariant expected app router to be mounted"; a `useState`-mirrors-into-URL pattern avoids depending on the App Router's own re-render timing in tests
+
+Wiring `AgentPerfView.tsx`'s range picker to the URL query string (plan-verifier
+fix round for `specs/16-agent-performance-dashboard.md` step 8 — "selected
+range goes into the URL query") needed both `useRouter()`/`useSearchParams()`.
+`AgentPerfView.test.tsx` renders `<AgentPerfView />` directly with no App
+Router test harness (this repo has none — confirmed via a repo-wide grep for
+`next-router-mock`/an App Router test provider) — without mocking the module,
+every render throws immediately. Fix, same shape as `EvalAgentDetailView.
+test.tsx`/`MultiAgentConfigureView.test.tsx` already use for the same import:
+`vi.mock("next/navigation", () => ({ useRouter: () => ({ replace: vi.fn() }),
+useSearchParams: () => new URLSearchParams() }))`.
+
+Separately, the state design itself matters for testability here: rather than
+making `useSearchParams()` the sole source of truth for `range` (re-derived on
+every render, matching `PullsListView.tsx`'s `?status` pattern exactly), this
+component keeps a local `useState<PerfRangeValue>` lazily initialized ONCE from
+`useSearchParams()` on mount, and `setRange` both updates that state directly
+AND calls `router.replace(...)` to mirror the choice into the URL. A fully
+URL-driven design would need the App Router to actually re-render the tree
+after `replace()` for a UI control (the range radiogroup) to reflect a new
+selection — real in the browser, but NOT true of `useRouter().replace` mocked
+as a bare `vi.fn()` in a vitest test, since nothing there re-triggers a render.
+The existing `AC-43` test (`fireEvent.click` a preset radio button, assert
+`aria-checked` flips) only stayed green because the local `useState` update is
+what drives the re-render, independent of whether `replace()` did anything.
+Any future component that needs to reflect a controlled UI element's state
+change immediately AND sync it to the URL should use this same "local state,
+URL as a write-only mirror" shape rather than a fully `searchParams`-driven
+one, unless a real App Router test harness gets added to this repo's vitest
+setup first.
+
 ### 2026-08-22 — D21's derived agent identity {color, icon} was NOT wired into `RunReviewDropdown`'s multi-select rows beyond the icon — the Dropdown extension's scope was already closed
 
 Building Phase B2 (plans/13-multi-agent-review.md), `agentIdentity()`
@@ -749,6 +808,39 @@ additive `api.postWithStatus`. Any future idempotent-POST route that needs to
 distinguish "created" from "returned existing" client-side should use
 `api.postWithStatus`, not thread a `created` flag through the response body
 just to work around `api.post`'s discarded status.
+
+### 2026-09-23 — `AgentEditor/constants.ts`'s `TABS` and `AgentEditorView/constants.ts`'s `VALID_TABS` are two separate arrays gating the same tab bar, and they drifted a SECOND time — this time shipping a fully unreachable tab through every automated check
+
+`plans/16-agent-performance-dashboard.md` added a `stats` tab (and, earlier in
+the same effort, `ci`) to `AgentEditor/constants.ts`'s `TABS` — the array that
+actually renders the tab bar buttons. `AgentEditorView/constants.ts`'s
+`VALID_TABS` — a SEPARATE array that gates the `?tab=` query param, falling
+back to `DEFAULT_TAB` (`"config"`) for anything not listed — was never
+updated to match, despite its own header comment already warning "they
+drifted once already (skills)" from a prior incident. Typecheck, the full
+test suite, `plan-verifier`, and `24904fc`'s new AC-1 parity tests all stayed
+green, because nothing type-checks one array against the other and no
+existing test rendered the Stats tab through the URL gate —
+`StatsTab.test.tsx` renders `<StatsTab agent={...} />` directly, never
+through `AgentEditorView`'s `?tab=` routing. Found only via a manual browser
+walkthrough while verifying AC-1 (commit `8c0c134`): both clicking the new
+"Stats" tab button and opening the dashboard's own `?tab=stats` "Open" link
+silently fell back to the Config tab, with no error anywhere.
+
+Fix: `AgentEditorView/constants.test.ts` now asserts `VALID_TABS` is a
+superset of every key in `TABS` (`for (const t of TABS) expect(VALID_TABS as
+readonly string[]).toContain(t.key)`), so a future tab added to one array
+without the other fails a test instead of silently falling back. Generalizes
+past this one pair: this file's "N places must stay in sync, only some
+enforced" bug class (see the PR-list-columns and `nav.ts` entries below) now
+has a THIRD instance, and this is the first of the three where the drift was
+caught by neither a compiler nor an existing test — only a same-content
+superset assertion between the two arrays catches it going forward.
+`e2e/specs/09-agent-performance.flow.json` (added `91abc5c`) now also asserts
+on Stats-tab CONTENT after navigating there, not just the resulting URL —
+deliberately, since the URL updates to `?tab=stats` regardless of whether
+`VALID_TABS` actually gates it correctly; a URL-only e2e assertion would not
+have caught this bug either.
 
 ## Session Notes
 

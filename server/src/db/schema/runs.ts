@@ -1,3 +1,4 @@
+import { desc } from 'drizzle-orm';
 import {
   pgTable,
   uuid,
@@ -32,6 +33,14 @@ export const agentRuns = pgTable(
     tokensIn: integer('tokens_in'),
     tokensOut: integer('tokens_out'),
     costUsd: doublePrecision('cost_usd'),
+    /**
+     * specs/16-agent-performance-dashboard.md — provenance of `costUsd`:
+     * 'provider' when OpenRouter's own `usage.cost` extension was present on
+     * the call, 'estimated' when it fell back to the price-book. NULL for
+     * every pre-migration row and any run whose cost is itself unknown —
+     * never guessed, surfaced as "unknown provenance".
+     */
+    costSource: text('cost_source', { enum: ['provider', 'estimated'] }),
     status: text('status'),
     /** Failure reason when status='failed' (LLM/API error, timeout, quota, …). */
     error: text('error'),
@@ -53,6 +62,13 @@ export const agentRuns = pgTable(
   },
   (t) => ({
     multiAgentIdx: index('agent_runs_multi_agent_idx').on(t.multiAgentRunId),
+    /** specs/16-agent-performance-dashboard.md — `ci/repository.ts`'s
+     *  `performanceRows`/`costByModel` filter on `workspaceId` + a `ranAt`
+     *  range (and the D2 findings join reaches this table through the SAME
+     *  condition); without this, both become a sequential scan as the table
+     *  grows. `desc` matches `ci_runs_list_idx`'s convention (recency-first
+     *  reads), though this index also serves the plain range-scan case. */
+    wsRanAtIdx: index('agent_runs_ws_ran_at_idx').on(t.workspaceId, desc(t.ranAt)),
   }),
 );
 

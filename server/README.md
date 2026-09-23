@@ -142,6 +142,35 @@ What the reviewer actually sends to the model is assembled in
   are dropped from the end of the resolved (agent-then-skill) order — never
   truncated mid-document.
 
+## Agent Performance dashboard & Stats (later lesson)
+
+Two read-only, zero-model-call endpoints share one aggregation
+(`plans/16-agent-performance-dashboard.md`):
+
+- `GET /agents/performance` (`modules/ci/routes.ts`) — the workspace-wide
+  dashboard: per-agent rows, cost-by-agent/cost-by-model breakdowns, and a
+  `most_active_agent` summary for the selected range.
+- `GET /agents/:id/stats` (`modules/agents/routes.ts`) — one agent's own
+  numbers, built from the exact same query and rules so it reconciles with
+  that agent's row in the dashboard (AC-1).
+
+Both call `CiRepository.performanceRows(workspaceId, from, to, agentId?)` and
+derive accept-rate, avg-cost, low-sample marking (`< 20` accept/dismiss
+decisions), and previous-period deltas through `modules/_shared/perf.ts` — a
+small library of pure aggregation functions, not a renderer. (Every prior
+`_shared/` file was a shared string-builder; see `LEARNINGS.md`'s 2026-09-23
+"Codebase Patterns" entry for the cross-module port wiring this new shape
+needed.) Range is `1`/`7`/`30`/`90`-day presets or a custom `from`/`to` window
+(capped at 366 days).
+
+`agent_runs.cost_source` (`'provider' | 'estimated' | null`, migration
+`0027`) tags each run's cost with its provenance — `'provider'` when
+OpenRouter returned its own `usage.cost`, `'estimated'` when the injected
+price-book fallback priced it instead (see `specs/01-run-cost-badge.md` for
+how `cost_usd` itself is computed), `null` for pre-migration rows. Both
+endpoints return a cost-by-source breakdown so a caller can distinguish
+reconciled billing data from a DevDigest estimate.
+
 ## Testing
 
 The suite splits by filename — `*.it.test.ts` is DB-backed, everything else is

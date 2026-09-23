@@ -31,6 +31,30 @@ surfacing run cost is a wiring job (schema column + `completeAgentRun` +
 contracts), never a provider/pricing job. Check what `ReviewOutcome` already
 carries before adding anything to the LLM path.
 
+**2026-09-23 addendum (specs/16-agent-performance-dashboard.md) — a failed
+run's `durationMs` is NOT null, only its `costUsd` is; don't reuse one
+denominator for both.** `run-executor.ts`'s failure catch block sets
+`durationMs: Date.now() - start` (always a real number) but `costUsd: null` —
+so "runs excluded from the cost/latency denominators" are NOT the same set
+per metric. `ci/repository.ts`'s `performanceRows` now tracks `costedRuns`
+(non-null `costUsd`) and `timedRuns` (non-null `durationMs`) as two SEPARATE
+counters rather than one shared "counted" denominator — dividing
+`totalCostUsd` by `runs` (or by a duration-based denominator) understated
+`avg_cost_usd` whenever any in-flight/failed run was in range, exactly the
+bug D1 in that plan describes. Also added `agent_runs.cost_source` (`'provider'
+| 'estimated'`, nullable) alongside `costUsd`, populated the same way this
+entry's cost value already was — `OpenRouterProvider.completeStructured`
+(`reviewer-core/src/llm/openrouter.ts`) now also returns `costSource: 'provider'
+| 'estimated' | null` on `StructuredResult`, and `reviewPullRequest`
+(`reviewer-core/src/review/run.ts`) aggregates it across map-reduce chunks with
+the SAME conservative rule as `costUsd`'s own null-collapse: `'provider'` only
+if every costed chunk was `'provider'`, else `'estimated'`, `null` iff
+`costUsd` itself is `null`. `OpenAIProvider`/`AnthropicProvider`
+(`adapters/llm/*.ts`) were deliberately NOT touched to set this field — they
+only ever price via the injected price-book estimator, so `run.ts` treats a
+present-but-unset `costSource` alongside a non-null `costUsd` as `'estimated'`
+by convention rather than touching every provider.
+
 Caveat from `reviewer-core/src/review/run.ts`: on the map-reduce strategy
 `costUsd` collapses to `null` if *any* chunk lacks a cost — so null means
 "unknown", and must not be rendered as $0.
@@ -139,6 +163,73 @@ future single-flight/dedup guard test in this codebase whose guarded method
 does fs or DB I/O before the check.
 
 ## Codebase Patterns
+
+### 2026-09-23 — a NEW `_shared/` file (`perf.ts`) works as a cross-module PURE-LOGIC port, not just a renderer — two services calling the same function is what makes "same rules" literal instead of a comment
+
+specs/16-agent-performance-dashboard.md needed the per-agent Stats tab
+(`modules/agents/service.ts`) to derive accept-rate/avg-cost/deltas/low-sample
+by the EXACT same rules as the global dashboard (`modules/ci/service.ts`),
+scoped to one agent instead of all. The existing `_shared/` precedent
+(`skill-render.ts`, `project-context-render.ts`) is always a RENDERER: one
+function, one shared string-building concern, called from two places. This is
+the first `_shared/` file that's a small library of pure aggregation
+functions (`resolvePerfRange`, `previousPeriod`, `computeAgentMetrics`,
+`dailyTrend`/`dailyTrendPoints`) consumed by two DIFFERENT services' own
+per-row mapping loops — `ci/service.ts`'s `agentPerformance` and
+`agents/service.ts`'s new `stats` both call `computeAgentMetrics(row, prev)`
+on their own `PerfSourceRow`s and get identical `accept_rate`/`avg_cost_usd`/
+`*_delta` derivations. Generalizes: when a plan says two features must
+"reconcile" or share "the same rules", the way to make that true BY
+CONSTRUCTION (not just by both implementers reading the same paragraph) is a
+shared PURE function in `_shared/`, not a shared prose comment in both
+services.
+
+One `no-cross-module` subtlety this surfaced that the existing
+`AgentLookup`-style port entries below don't cover: `_shared/` files are
+exempt as an import TARGET (`to: pathNot: '^src/modules/_shared/.+'`) but are
+**not** exempt as an import SOURCE — a file living in `modules/_shared/`
+importing from `modules/ci/*` is itself a `$1` mismatch (`_shared` ≠ `ci`) and
+fails `pnpm arch` exactly like any other module would. So `_shared/perf.ts`
+declares its own local `PerfSourceRow` interface (structurally mirroring
+`ci/repository.ts`'s real `PerfRangeRow`, never imported from it) — the same
+local-port technique the `AgentLookup` entry above already documents, just
+applied to a `_shared/` file instead of a `service.ts`. `pnpm arch` passed
+with zero new violations on the first attempt once this was declared locally.
+
+Also wired: the SAME query — `CiRepository.performanceRows(workspaceId, from,
+to, agentId?)` — serves both the all-agents dashboard (`agentId` omitted) and
+the single-agent Stats route (`agentId` set), via a `PerformanceRowSource`
+local port on `AgentsService` (mirrors this file's `EvalCleanup` param shape:
+optional 4th constructor arg, wired at `agents/routes.ts` from
+`app.container.ciRepo` with zero explicit type import). `db-only-in-
+repositories`/`no-cross-module` both stayed clean because the port method
+signature never leaks a `ci`-module-specific type across the boundary.
+
+**2026-09-23 addendum (plan-verifier fix round, AC-4) — `ci/service.ts`'s
+`agentPerformance` only ever built `AgentPerfRow`s from `performanceRows`
+results, which structurally can NEVER include an agent with zero runs in the
+selected period (the query's own `WHERE ranAt BETWEEN from AND to` excludes
+it) — so such an agent was silently missing from the table entirely, not
+merely rendered with fabricated zeros.** Fixed by also fetching the
+workspace's full agent list (`agentLookup.list`, already called for name/
+provider/model lookups on the real rows) and, for every agent present there
+but absent from `perfRows`, pushing a row built from `emptyPerfSourceRow(
+agentId)` (`_shared/perf.ts`, already used by `agents/service.ts`'s `stats()`
+for this exact single-agent case — the fix here is literally reusing that
+helper one ring up, for the whole-workspace aggregate). Two non-obvious
+follow-ons this created: (1) `most_active_agent` must filter to `runs > 0`
+before picking the max, or a workspace where every agent had zero runs in
+period (but agents exist) reports an arbitrary zero-run agent as "most
+active" instead of `null` — the previous `rows.slice().sort(...)[0] ?? null`
+only needed the `?? null` fallback for a genuinely EMPTY `rows` array, which
+stopped being possible once zero-run rows are always synthesized. (2) no new
+contract field was needed to mark "no runs in this period" distinctly from a
+real agent's legitimate zeros — `runs === 0` is already unambiguous on
+`AgentPerfRow`, since a real `performanceRows`-backed row can never have
+`runs: 0` by construction; the client (`AgentTable.tsx`) branches on it
+directly, mirroring the pre-existing `data.runs === 0` convention `agents/
+service.ts stats()` / `StatsTab.tsx` already used for the single-agent
+version of the same state.
 
 ### 2026-08-11 — `parseUnifiedDiff` silently drops binary files, pure renames, and deletions from `diff.files` — `diff.raw` still has them
 
