@@ -360,4 +360,21 @@ describe('CiService.agentPerformance', () => {
     expect(rowA.runs_delta).toBeNull();
     expect(rowB.runs_delta).toBe(3); // 5 - 2
   });
+
+  it("falls back to an empty agents list (never crashes) when the injected AgentLookup has no optional `list`", async () => {
+    // `AgentLookup.list` is optional (ports.ts) precisely so a caller that
+    // only needs `getById` can wire a minimal mock — `FakeAgentLookup`
+    // (used by the `previewFile` suite above) is exactly that minimal shape.
+    const repo = new FakePerfRepo([[perfRow({ agentId: AGENT_ID, runsLocal: 3, countedRuns: 3 })], []]);
+    const service = makeService(repo, new FakeAgentLookup());
+
+    const result = await service.agentPerformance(WORKSPACE_ID, { days: 7 });
+
+    expect(result.agents).toHaveLength(1);
+    // No `list()` => no agent record to join => the row still renders, just
+    // unlabeled, rather than the whole request failing.
+    expect(result.agents[0]!.agent_name).toBe('Unknown agent');
+    expect(result.agents[0]!.provider).toBeNull();
+    expect(result.agents[0]!.runs).toBe(3);
+  });
 });

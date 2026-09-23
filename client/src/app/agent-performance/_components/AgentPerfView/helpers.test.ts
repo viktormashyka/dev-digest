@@ -3,6 +3,7 @@ import type { AgentPerfRow } from "@devdigest/shared/contracts/productionize";
 import {
   parseRangeFromSearchParams,
   rangeToSearchParams,
+  sortAgents,
   totalCostBySource,
   totalCostDelta,
   totalTrend,
@@ -42,6 +43,44 @@ function row(overrides: Partial<AgentPerfRow>): AgentPerfRow {
     ...overrides,
   };
 }
+
+describe("sortAgents", () => {
+  it("sorts a low_sample agent last regardless of direction, even when its accept_rate is highest", () => {
+    const full = row({ agent_id: "full", accept_rate: 0.5, low_sample: false });
+    const low = row({ agent_id: "low", accept_rate: 0.99, low_sample: true });
+
+    expect(sortAgents([low, full], "accept_rate", "desc").map((r) => r.agent_id)).toEqual(["full", "low"]);
+    expect(sortAgents([low, full], "accept_rate", "asc").map((r) => r.agent_id)).toEqual(["full", "low"]);
+  });
+
+  it("sorts a null accept_rate last regardless of direction", () => {
+    const known = row({ agent_id: "known", accept_rate: 0.1, low_sample: false });
+    const unknown = row({ agent_id: "unknown", accept_rate: null, low_sample: false });
+
+    expect(sortAgents([unknown, known], "accept_rate", "desc").map((r) => r.agent_id)).toEqual(["known", "unknown"]);
+    expect(sortAgents([unknown, known], "accept_rate", "asc").map((r) => r.agent_id)).toEqual(["known", "unknown"]);
+  });
+
+  it("sorts a numeric field (runs) ascending/descending", () => {
+    const a = row({ agent_id: "a", runs: 3 });
+    const b = row({ agent_id: "b", runs: 9 });
+
+    expect(sortAgents([a, b], "runs", "asc").map((r) => r.agent_id)).toEqual(["a", "b"]);
+    expect(sortAgents([a, b], "runs", "desc").map((r) => r.agent_id)).toEqual(["b", "a"]);
+  });
+
+  it("sorts total_cost_usd, with null trailing regardless of direction", () => {
+    const cheap = row({ agent_id: "cheap", total_cost_usd: 1 });
+    const pricey = row({ agent_id: "pricey", total_cost_usd: 5 });
+    const unknown = row({ agent_id: "unknown", total_cost_usd: null });
+
+    expect(sortAgents([unknown, pricey, cheap], "total_cost_usd", "asc").map((r) => r.agent_id)).toEqual([
+      "cheap",
+      "pricey",
+      "unknown",
+    ]);
+  });
+});
 
 describe("totalTrend", () => {
   it("sums per-agent trend arrays index-wise", () => {

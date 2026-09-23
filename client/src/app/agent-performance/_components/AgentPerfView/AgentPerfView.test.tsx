@@ -13,9 +13,11 @@ let PERF: AgentPerf = {
   cost_by_model: [],
 };
 let LOADING = false;
+let IS_ERROR = false;
+const REFETCH = vi.fn();
 
 vi.mock("@/lib/hooks/agent-performance", () => ({
-  useAgentPerformance: () => ({ data: PERF, isLoading: LOADING, isError: false, refetch: vi.fn() }),
+  useAgentPerformance: () => ({ data: PERF, isLoading: LOADING, isError: IS_ERROR, refetch: REFETCH }),
   // `PerfRangePicker` (a real, unmocked component) imports this helper from
   // the same module — the mock above replaces the whole module, so it must
   // be re-provided here too.
@@ -28,8 +30,11 @@ vi.mock("@/components/app-shell", () => ({
 
 // specs/16-agent-performance-dashboard.md step 8 — the selected range is
 // mirrored into the URL query string, via `useRouter`/`useSearchParams`.
+// `replace` is hoisted (not a fresh `vi.fn()` per render) so tests can
+// assert on what it was called with.
+const ROUTER_REPLACE = vi.fn();
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ replace: vi.fn() }),
+  useRouter: () => ({ replace: ROUTER_REPLACE }),
   useSearchParams: () => new URLSearchParams(),
 }));
 
@@ -73,6 +78,7 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   LOADING = false;
+  IS_ERROR = false;
 });
 
 function renderWithIntl(ui: React.ReactElement) {
@@ -125,12 +131,33 @@ describe("AgentPerfView", () => {
     expect(screen.getByText(perfMessages.ciOnlyNote)).toBeInTheDocument();
   });
 
-  it("switching the range preset changes the requested range (AC-43)", () => {
+  it("switching the range preset changes the requested range and mirrors it into the URL (AC-43, plan step 8)", () => {
     PERF = { summary: { runs: 3, total_cost_usd: 0.1, avg_accept_rate: 0.5, most_active_agent: "Security", range_days: 30, range: RANGE }, agents: [row({})], cost_by_agent: [], cost_by_model: [] };
     renderWithIntl(<AgentPerfView />);
     const sevenDayBtn = screen.getByRole("radio", { name: "7 days" });
     fireEvent.click(sevenDayBtn);
     expect(sevenDayBtn).toHaveAttribute("aria-checked", "true");
+    expect(ROUTER_REPLACE).toHaveBeenCalledWith(expect.stringContaining("range_days=7"));
+  });
+
+  it("shows the error state with a retry action when the fetch fails (AC-6's error path)", () => {
+    IS_ERROR = true;
+    renderWithIntl(<AgentPerfView />);
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(screen.getByText(perfMessages.loadError)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /retry/i }));
+    expect(REFETCH).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders the cost-provenance line when at least one bucket is known (AC-7)", () => {
+    PERF = {
+      summary: { runs: 4, total_cost_usd: 2.5, avg_accept_rate: 0.5, most_active_agent: "Security", range_days: 30, range: RANGE },
+      agents: [row({ cost_by_source: { provider: 2.5, estimated: null, unknown: null } })],
+      cost_by_agent: [],
+      cost_by_model: [],
+    };
+    renderWithIntl(<AgentPerfView />);
+    expect(screen.getByText(perfMessages.cost.reconciled.replace("{amount}", "$2.50"))).toBeInTheDocument();
   });
 
   it("a server-synthesized zero-run row shows N/A markers and, expanded, its accepted/dismissed/pending detail (AC-4)", () => {
