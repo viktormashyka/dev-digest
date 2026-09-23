@@ -35,6 +35,11 @@ high-confidence guidance unless it's obviously stale.
 - Server-rendered vs client components: check for the `"use client"` boundary
   before adding hooks/state to a page component — App Router pages default to
   server components.
+- A tab added to an editor's `TABS` array (drives the tab bar) needs the same
+  key added to its sibling `VALID_TABS` array (gates `?tab=`) too — nothing
+  but a test enforces this, and the failure mode is a silently unreachable
+  tab, not an error. Has drifted twice on the agent editor; see
+  `LEARNINGS.md`'s 2026-09-23 "Recurring Errors & Fixes" entry.
 
 ## Testing
 

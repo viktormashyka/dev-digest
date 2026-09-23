@@ -809,6 +809,39 @@ distinguish "created" from "returned existing" client-side should use
 `api.postWithStatus`, not thread a `created` flag through the response body
 just to work around `api.post`'s discarded status.
 
+### 2026-09-23 — `AgentEditor/constants.ts`'s `TABS` and `AgentEditorView/constants.ts`'s `VALID_TABS` are two separate arrays gating the same tab bar, and they drifted a SECOND time — this time shipping a fully unreachable tab through every automated check
+
+`plans/16-agent-performance-dashboard.md` added a `stats` tab (and, earlier in
+the same effort, `ci`) to `AgentEditor/constants.ts`'s `TABS` — the array that
+actually renders the tab bar buttons. `AgentEditorView/constants.ts`'s
+`VALID_TABS` — a SEPARATE array that gates the `?tab=` query param, falling
+back to `DEFAULT_TAB` (`"config"`) for anything not listed — was never
+updated to match, despite its own header comment already warning "they
+drifted once already (skills)" from a prior incident. Typecheck, the full
+test suite, `plan-verifier`, and `24904fc`'s new AC-1 parity tests all stayed
+green, because nothing type-checks one array against the other and no
+existing test rendered the Stats tab through the URL gate —
+`StatsTab.test.tsx` renders `<StatsTab agent={...} />` directly, never
+through `AgentEditorView`'s `?tab=` routing. Found only via a manual browser
+walkthrough while verifying AC-1 (commit `8c0c134`): both clicking the new
+"Stats" tab button and opening the dashboard's own `?tab=stats` "Open" link
+silently fell back to the Config tab, with no error anywhere.
+
+Fix: `AgentEditorView/constants.test.ts` now asserts `VALID_TABS` is a
+superset of every key in `TABS` (`for (const t of TABS) expect(VALID_TABS as
+readonly string[]).toContain(t.key)`), so a future tab added to one array
+without the other fails a test instead of silently falling back. Generalizes
+past this one pair: this file's "N places must stay in sync, only some
+enforced" bug class (see the PR-list-columns and `nav.ts` entries below) now
+has a THIRD instance, and this is the first of the three where the drift was
+caught by neither a compiler nor an existing test — only a same-content
+superset assertion between the two arrays catches it going forward.
+`e2e/specs/09-agent-performance.flow.json` (added `91abc5c`) now also asserts
+on Stats-tab CONTENT after navigating there, not just the resulting URL —
+deliberately, since the URL updates to `?tab=stats` regardless of whether
+`VALID_TABS` actually gates it correctly; a URL-only e2e assertion would not
+have caught this bug either.
+
 ## Session Notes
 
 ### 2026-08-27 — test-writer backfill for specs/14: `CiTab.tsx` reads `inst.last_run_status`/`inst.last_run_at`, fields the real API response never sends
